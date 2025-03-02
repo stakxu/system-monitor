@@ -52,46 +52,47 @@ var (
 )
 
 type SystemInfo struct {
-	Process struct {
-		Online    bool              `json:"online"`
-		Uptime    float64          `json:"uptime"`
-		Processes map[string]bool   `json:"processes"`  // 修改为map存储多个进程状态
-	} `json:"process"`
-	System struct {
-		Architecture string `json:"architecture"`
-		Platform     string `json:"platform"`
-		Release      string `json:"release"`
-		Distro       string `json:"distro"`
-	} `json:"system"`
-	Memory struct {
-		Total           string `json:"total"`
-		Free            string `json:"free"`
-		Used            string `json:"used"`
-		UsagePercentage string `json:"usagePercentage"`
-	} `json:"memory"`
-	Disk struct {
-		Total           string `json:"total"`
-		Used            string `json:"used"`
-		Free            string `json:"free"`
-		UsagePercentage string `json:"usagePercentage"`
-	} `json:"disk"`
-	CPU struct {
-		Model      string `json:"model"`
-		Cores      int    `json:"cores"`
-		Speed      string `json:"speed"`
-		Load       string `json:"load"`
-		LoadAvg5   string `json:"loadavg5"`
-	} `json:"cpu"`
-	Network struct {
-		UploadSpeed    string `json:"uploadSpeed"`
-		DownloadSpeed  string `json:"downloadSpeed"`
-		TotalUpload    string `json:"totalUpload"`
-		TotalDownload  string `json:"totalDownload"`
-	} `json:"network"`
-	Timestamp struct {
-		Current  string `json:"current"`
-		Timezone string `json:"timezone"`
-	} `json:"timestamp"`
+    Process struct {
+        Online    bool              `json:"online"`
+        Uptime    float64           `json:"uptime"`
+        Processes map[string]bool   `json:"processes"`  // 修改为map存储多个进程状态
+    } `json:"process"`
+    System struct {
+        Architecture string `json:"architecture"`
+        Platform     string `json:"platform"`
+        Release      string `json:"release"`
+        Distro       string `json:"distro"`
+    } `json:"system"`
+    Memory struct {
+        Total           string `json:"total"`
+        Free            string `json:"free"`
+        Used            string `json:"used"`
+        UsagePercentage string `json:"usagePercentage"`
+    } `json:"memory"`
+    Disk struct {
+        Total           string `json:"total"`
+        Used            string `json:"used"`
+        Free            string `json:"free"`
+        UsagePercentage string `json:"usagePercentage"`
+    } `json:"disk"`
+    CPU struct {
+        Model      string `json:"model"`
+        Cores      int    `json:"cores"`
+        Speed      string `json:"speed"`
+        Load       string `json:"load"`
+        LoadAvg5   string `json:"loadavg5"`
+    } `json:"cpu"`
+    Network struct {
+        UploadSpeed    string `json:"uploadSpeed"`
+        DownloadSpeed  string `json:"downloadSpeed"`
+        TotalUpload    string `json:"totalUpload"`
+        TotalDownload  string `json:"totalDownload"`
+    } `json:"network"`
+    Connections int `json:"connections"` // 新增字段：网络链接数
+    Timestamp struct {
+        Current  string `json:"current"`
+        Timezone string `json:"timezone"`
+    } `json:"timestamp"`
 }
 
 func loadConfig() error {
@@ -106,6 +107,15 @@ func loadConfig() error {
 	}
 
 	return nil
+}
+
+func getConnectionCount() (int, error) {
+    // 获取所有网络连接
+    conns, err := psnet.Connections("tcp")
+    if err != nil {
+        return 0, fmt.Errorf("获取网络连接数失败: %v", err)
+    }
+    return len(conns), nil
 }
 
 func getListenAddresses() []string {
@@ -216,105 +226,113 @@ func isProcessRunning(name string) bool {
 }
 
 func getSystemInfo(w http.ResponseWriter, r *http.Request) {
-	var info SystemInfo
-	info.Process.Online = true
-	hostInfo, _ := host.Info()
-	info.Process.Uptime = float64(hostInfo.Uptime)
-	
-	// 检查所有配置的进程状态
-	info.Process.Processes = make(map[string]bool)
-	for _, processName := range config.Monitor.Processes {
-		info.Process.Processes[processName] = isProcessRunning(processName)
-	}
+    var info SystemInfo
+    info.Process.Online = true
+    hostInfo, _ := host.Info()
+    info.Process.Uptime = float64(hostInfo.Uptime)
 
-	// 系统信息
-	info.System.Architecture = runtime.GOARCH
-	info.System.Platform = runtime.GOOS
-	info.System.Release = hostInfo.PlatformVersion
-	info.System.Distro = hostInfo.Platform
+    // 检查所有配置的进程状态
+    info.Process.Processes = make(map[string]bool)
+    for _, processName := range config.Monitor.Processes {
+        info.Process.Processes[processName] = isProcessRunning(processName)
+    }
 
-	// 内存信息
-	err := withRetry(func() error {
-		v, err := mem.VirtualMemory()
-		if err != nil {
-			return err
-		}
-		info.Memory.Total = bytesToGB(v.Total)
-		info.Memory.Free = bytesToGB(v.Free)
-		info.Memory.Used = bytesToGB(v.Used)
-		info.Memory.UsagePercentage = fmt.Sprintf("%.2f%%", v.UsedPercent)
-		return nil
-	})
-	if err != nil {
-		log.Printf("获取内存信息失败: %v", err)
-	}
+    // 系统信息
+    info.System.Architecture = runtime.GOARCH
+    info.System.Platform = runtime.GOOS
+    info.System.Release = hostInfo.PlatformVersion
+    info.System.Distro = hostInfo.Platform
 
-	// 磁盘信息
-	err = withRetry(func() error {
-		d, err := disk.Usage("/")
-		if err != nil {
-			return err
-		}
-		info.Disk.Total = bytesToGB(d.Total)
-		info.Disk.Used = bytesToGB(d.Used)
-		info.Disk.Free = bytesToGB(d.Free)
-		info.Disk.UsagePercentage = fmt.Sprintf("%.2f%%", d.UsedPercent)
-		return nil
-	})
-	if err != nil {
-		log.Printf("获取磁盘信息失败: %v", err)
-	}
+    // 内存信息
+    err := withRetry(func() error {
+        v, err := mem.VirtualMemory()
+        if err != nil {
+            return err
+        }
+        info.Memory.Total = bytesToGB(v.Total)
+        info.Memory.Free = bytesToGB(v.Free)
+        info.Memory.Used = bytesToGB(v.Used)
+        info.Memory.UsagePercentage = fmt.Sprintf("%.2f%%", v.UsedPercent)
+        return nil
+    })
+    if err != nil {
+        log.Printf("获取内存信息失败: %v", err)
+    }
 
-	// CPU信息
-	err = withRetry(func() error {
-		cpuInfo, err := cpu.Info()
-		if err != nil {
-			return err
-		}
-		percentage, err := cpu.Percent(time.Second, false)
-		if err != nil {
-			return err
-		}
-		loadavg, err := load.Avg()
-		if err != nil {
-			return err
-		}
-		
-		if len(cpuInfo) > 0 {
-			info.CPU.Model = cpuInfo[0].ModelName
-			info.CPU.Cores = len(cpuInfo)
-			info.CPU.Speed = fmt.Sprintf("%.2f GHz", cpuInfo[0].Mhz/1000)
-		}
-		if len(percentage) > 0 {
-			info.CPU.Load = fmt.Sprintf("%.2f%%", percentage[0])
-		}
-		info.CPU.LoadAvg5 = fmt.Sprintf("%.2f", loadavg.Load5)
-		return nil
-	})
-	if err != nil {
-		log.Printf("获取CPU信息失败: %v", err)
-	}
+    // 磁盘信息
+    err = withRetry(func() error {
+        d, err := disk.Usage("/")
+        if err != nil {
+            return err
+        }
+        info.Disk.Total = bytesToGB(d.Total)
+        info.Disk.Used = bytesToGB(d.Used)
+        info.Disk.Free = bytesToGB(d.Free)
+        info.Disk.UsagePercentage = fmt.Sprintf("%.2f%%", d.UsedPercent)
+        return nil
+    })
+    if err != nil {
+        log.Printf("获取磁盘信息失败: %v", err)
+    }
 
-	// 网络信息
-	netLock.Lock()
-	info.Network.UploadSpeed = fmt.Sprintf("%.2f MB/s", txSpeed)
-	info.Network.DownloadSpeed = fmt.Sprintf("%.2f MB/s", rxSpeed)
-	info.Network.TotalUpload = bytesToGB(lastTxBytes)
-	info.Network.TotalDownload = bytesToGB(lastRxBytes)
-	netLock.Unlock()
+    // CPU信息
+    err = withRetry(func() error {
+        cpuInfo, err := cpu.Info()
+        if err != nil {
+            return err
+        }
+        percentage, err := cpu.Percent(time.Second, false)
+        if err != nil {
+            return err
+        }
+        loadavg, err := load.Avg()
+        if err != nil {
+            return err
+        }
 
-	// 时间信息（使用北京时间）
-	loc, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		log.Printf("加载北京时区失败: %v", err)
-		loc = time.Local
-	}
-	now := time.Now().In(loc)
-	info.Timestamp.Current = now.Format("2006-01-02 15:04:05")
-	info.Timestamp.Timezone = "Asia/Shanghai"
+        if len(cpuInfo) > 0 {
+            info.CPU.Model = cpuInfo[0].ModelName
+            info.CPU.Cores = len(cpuInfo)
+            info.CPU.Speed = fmt.Sprintf("%.2f GHz", cpuInfo[0].Mhz/1000)
+        }
+        if len(percentage) > 0 {
+            info.CPU.Load = fmt.Sprintf("%.2f%%", percentage[0])
+        }
+        info.CPU.LoadAvg5 = fmt.Sprintf("%.2f", loadavg.Load5)
+        return nil
+    })
+    if err != nil {
+        log.Printf("获取CPU信息失败: %v", err)
+    }
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
+    // 网络信息
+    netLock.Lock()
+    info.Network.UploadSpeed = fmt.Sprintf("%.2f MB/s", txSpeed)
+    info.Network.DownloadSpeed = fmt.Sprintf("%.2f MB/s", rxSpeed)
+    info.Network.TotalUpload = bytesToGB(lastTxBytes)
+    info.Network.TotalDownload = bytesToGB(lastRxBytes)
+    netLock.Unlock()
+
+    // 获取链接数
+    connCount, err := getConnectionCount()
+    if err != nil {
+        log.Printf("获取链接数失败: %v", err)
+    } else {
+        info.Connections = connCount
+    }
+
+    // 时间信息（使用北京时间）
+    loc, err := time.LoadLocation("Asia/Shanghai")
+    if err != nil {
+        log.Printf("加载北京时区失败: %v", err)
+        loc = time.UTC // 如果加载失败，使用 UTC 作为备选
+    }
+    now := time.Now().In(loc) // 显式转换为北京时间
+    info.Timestamp.Current = now.Format("2006-01-02 15:04:05")
+    info.Timestamp.Timezone = loc.String() // 确保时区名称正确
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(info)
 }
 
 func main() {
@@ -324,7 +342,7 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
-	log.Printf("系统监控正在启动")
+	log.Printf("系统监控API正在启动")
 
 	// 启动网络速度监控
 	go updateNetworkSpeeds()
@@ -354,6 +372,8 @@ func main() {
 			continue
 		}
 		go server.Serve(listener)
-  }
+	}
+
+	// 保持主程序运行
 	select {}
 }
